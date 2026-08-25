@@ -46,21 +46,28 @@ export default async function(ctx) {
   } catch(e) {}
 
   // ---- IPPure 节点信息 ----
+  // 可通过环境变量 GROUP 指定策略；默认先按规则路由，失败后强制走 Proxy 策略重试
+  const IPPURE_POLICY = clean((ctx.env && ctx.env.GROUP) || '') || 'Proxy';
   let pure = null;
-  try {
-    const resp = await ctx.http.get(IPPURE_URL, {
-      headers: { 'Cache-Control': 'no-cache' },
-      timeout: 8000
-    });
-    if (resp.status === 200) {
-      pure = await resp.json();
-      if (pure && typeof pure.fraudScore !== 'undefined') {
-        let s = Number(pure.fraudScore);
-        pure.fraudScore = Number.isFinite(s) ? Math.max(0, Math.min(100, s)) : 99;
+  const attempts = [null, IPPURE_POLICY];
+  for (let i = 0; i < attempts.length && !pure; i++) {
+    try {
+      const opts = {
+        headers: { 'Cache-Control': 'no-cache' },
+        timeout: 8000
+      };
+      if (attempts[i]) opts.policy = attempts[i];
+      const resp = await ctx.http.get(IPPURE_URL, opts);
+      if (resp.status === 200) {
+        pure = await resp.json();
+        if (pure && typeof pure.fraudScore !== 'undefined') {
+          let s = Number(pure.fraudScore);
+          pure.fraudScore = Number.isFinite(s) ? Math.max(0, Math.min(100, s)) : 99;
+        }
+        try { ctx.storage.setJSON(IPPURE_CACHE_KEY, { data: pure, ts: Date.now() }); } catch(e) {}
       }
-      try { ctx.storage.setJSON(IPPURE_CACHE_KEY, { data: pure, ts: Date.now() }); } catch(e) {}
-    }
-  } catch(e) {}
+    } catch(e) {}
+  }
 
   // 主请求失败时读缓存
   if (!pure) {
