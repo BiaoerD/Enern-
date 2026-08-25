@@ -165,11 +165,11 @@ export default async function(ctx) {
   const n = result.node || {};
   const addrText = [n.country, n.city].filter(Boolean).join(' · ') || '未知';
 
-  // 总量与均值使用同一单位（MB / GB 自动切换）
-  const unit = result.unit || 'MB';
-  const totalMB = result.totalMB || 0;
-  const totalVal = unit === 'GB' ? (totalMB / 1000).toFixed(2) : totalMB.toFixed(1);
-  const avgVal = unit === 'GB' ? (result.mBs / 1000).toFixed(2) : result.mBs.toFixed(2);
+  // 总量与均值统一使用比特单位（Mb / Gb 自动切换）
+  const totalMb = (result.totalMB || 0) * 8;
+  const unit = totalMb >= 1000 ? 'Gb' : 'Mb';
+  const totalVal = totalMb >= 1000 ? (totalMb / 1000).toFixed(2) : totalMb.toFixed(1);
+  const avgVal = totalMb >= 1000 ? (result.avgMbps / 1000).toFixed(2) : result.avgMbps.toFixed(1);
 
   // 逐秒数据按每行 5 个排成两行
   function sampleRow(values, offset) {
@@ -353,7 +353,7 @@ export default async function(ctx) {
           },
           {
             type: 'text',
-            text: `${avgVal} ${unit}/s`,
+            text: `${avgVal} ${unit}ps`,
             font: { size: 'caption2', weight: 'bold' },
             textColor: color
           },
