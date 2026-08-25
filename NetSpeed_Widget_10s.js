@@ -1,6 +1,6 @@
 // NetSpeed 10s 小组件
 // 持续测速 10 秒：每秒记录一次速度，结束后显示平均值与逐秒数据
-// 节点显示：整合 IPPure（出口 IP / 国家城市 / 运营商 / IP 风险评分）
+// 节点显示：整合 IPPure（国家城市 / 运营商 / 住宅原生 / IP 风险评分）
 
 export default async function(ctx) {
   const TEST_SECONDS = 10;
@@ -13,29 +13,6 @@ export default async function(ctx) {
 
   function clean(value) {
     return String(value === undefined || value === null ? '' : value).trim();
-  }
-
-  function countryCode(value) {
-    const code = clean(value).toUpperCase();
-    return /^[A-Z]{2}$/.test(code) ? code : '';
-  }
-
-  function flag(code) {
-    const c = countryCode(code);
-    if (!c) return '';
-    return (
-      String.fromCodePoint(c.charCodeAt(0) + 127397) +
-      String.fromCodePoint(c.charCodeAt(1) + 127397)
-    );
-  }
-
-  function shortISP(value) {
-    const isp = clean(value);
-    if (!isp) return '';
-    if (isp.length <= 14) return isp;
-    const words = isp.split(/\s+/);
-    if (words.length > 1) return words[0];
-    return isp.slice(0, 13) + '…';
   }
 
   // ---- 先读缓存，测速失败或进行中时展示上次结果 ----
@@ -92,12 +69,18 @@ export default async function(ctx) {
     else { riskText = '高危'; riskColor = '#DC2626'; }
   }
 
+  // 住宅/机房判定
+  const resText = pure
+    ? (pure.isResidential === true ? '住宅原生' : '机房网络')
+    : '';
+  const resColor = pure && pure.isResidential === true ? '#34D399' : '#FACC15';
+
   const node = pure ? {
-    flag: flag(pure.countryCode || pure.country),
-    city: clean(pure.city),
     country: clean(pure.country),
+    city: clean(pure.city),
     isp: clean(pure.asOrganization),
-    ip: clean(pure.ip),
+    resText: resText,
+    resColor: resColor,
     riskText: riskText,
     riskColor: riskColor
   } : null;
@@ -170,15 +153,14 @@ export default async function(ctx) {
   const now = new Date(result.timestamp || Date.now());
   const timeStr = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
 
-  const isSmall = ctx.widgetFamily === 'systemSmall';
+  const family = ctx.widgetFamily || 'systemMedium';
+  const isSmall = family === 'systemSmall';
+  // 逐秒列表的标题仅在大尺寸显示，中号省下空间防溢出
+  const showSampleLabel = family === 'systemLarge' || family === 'systemExtraLarge';
 
-  // 节点显示文本：旗帜 + 城市/国家 + 运营商
+  // 节点显示文本：国家 · 城市（与 IPPure 原版一致）
   const n = result.node || {};
-  const geoText = [n.flag, n.city || n.country].filter(Boolean).join(' ');
-  const nodeParts = [];
-  if (geoText) nodeParts.push(geoText);
-  if (n.isp) nodeParts.push(shortISP(n.isp));
-  const nodeText = nodeParts.join(' · ') || '未知';
+  const addrText = [n.country, n.city].filter(Boolean).join(' · ') || '未知';
 
   // 逐秒数据按每行 5 个排成两行
   function sampleRow(values, offset) {
@@ -205,19 +187,61 @@ export default async function(ctx) {
     rows.push(sampleRow(result.samples.slice(i, i + 5), i));
   }
 
-  const sampleSection = [
-    {
+  const sampleSection = [];
+  if (showSampleLabel) {
+    sampleSection.push({
       type: 'text',
       text: '每秒测速 (Mbps)',
       font: { size: 'caption2', weight: 'semibold' },
       textColor: { light: '#8E8E93', dark: '#8E8E93' }
-    }
-  ].concat(rows);
+    });
+  }
+  sampleSection.push(...rows);
+
+  // 节点行：地址在左，住宅/机房 + 风险评级在右
+  const nodeRowChildren = [
+    {
+      type: 'image',
+      src: 'sf-symbol:mappin.and.ellipse',
+      width: isSmall ? 11 : 12,
+      height: isSmall ? 11 : 12,
+      color: color
+    },
+    {
+      type: 'text',
+      text: ` ${addrText}`,
+      font: { size: 'caption2', weight: 'medium' },
+      textColor: { light: '#3A3A3C', dark: '#C7C7CC' },
+      lineLimit: 1
+    },
+    { type: 'spacer' }
+  ];
+  if (!isSmall && n.resText) {
+    nodeRowChildren.push({
+      type: 'text',
+      text: n.resText,
+      font: { size: 'caption2', weight: 'bold' },
+      textColor: n.resColor
+    });
+    nodeRowChildren.push({
+      type: 'text',
+      text: '  ',
+      font: { size: 'caption2' }
+    });
+  }
+  if (n.riskText) {
+    nodeRowChildren.push({
+      type: 'text',
+      text: n.riskText,
+      font: { size: 'caption2', weight: 'bold' },
+      textColor: n.riskColor
+    });
+  }
 
   return {
     type: 'widget',
-    padding: isSmall ? 10 : 14,
-    gap: isSmall ? 5 : 7,
+    padding: isSmall ? 10 : 10,
+    gap: isSmall ? 5 : 3,
 
     backgroundColor: {
       light: '#FFFFFF',
@@ -234,8 +258,8 @@ export default async function(ctx) {
           {
             type: 'image',
             src: `sf-symbol:${icon}`,
-            width: isSmall ? 13 : 15,
-            height: isSmall ? 13 : 15,
+            width: isSmall ? 13 : 14,
+            height: isSmall ? 13 : 14,
             color: color
           },
           {
@@ -263,7 +287,7 @@ export default async function(ctx) {
           {
             type: 'text',
             text: `${result.avgMbps} Mbps`,
-            font: { size: isSmall ? 24 : 32, weight: 'bold' },
+            font: { size: isSmall ? 22 : 26, weight: 'bold' },
             textColor: color
           },
           { type: 'spacer' }
@@ -274,31 +298,7 @@ export default async function(ctx) {
         type: 'stack',
         direction: 'row',
         alignItems: 'center',
-        children: [
-          {
-            type: 'image',
-            src: 'sf-symbol:mappin.and.ellipse',
-            width: isSmall ? 11 : 12,
-            height: isSmall ? 11 : 12,
-            color: color
-          },
-          {
-            type: 'text',
-            text: ` ${nodeText}`,
-            font: { size: 'caption2', weight: 'medium' },
-            textColor: { light: '#3A3A3C', dark: '#C7C7CC' },
-            lineLimit: 1
-          },
-          { type: 'spacer' },
-          n.riskText
-            ? {
-                type: 'text',
-                text: n.riskText,
-                font: { size: 'caption2', weight: 'bold' },
-                textColor: n.riskColor
-              }
-            : { type: 'spacer' }
-        ]
+        children: nodeRowChildren
       },
 
       {
@@ -309,9 +309,9 @@ export default async function(ctx) {
           {
             type: 'stack',
             width: barWidth,
-            height: 4,
+            height: 3,
             backgroundColor: color,
-            cornerRadius: 2
+            cornerRadius: 1.5
           },
           { type: 'spacer' }
         ]
