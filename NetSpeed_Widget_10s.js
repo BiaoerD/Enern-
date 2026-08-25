@@ -122,10 +122,13 @@ export default async function(ctx) {
   // 测速成功才覆盖缓存（平均值 = 逐秒数据的平均）
   if (totalBytes > 0) {
     const avg = samples.reduce((a, b) => a + b, 0) / samples.length;
+    const totalMB = totalBytes / 1e6;
     result = {
       avgMbps: parseFloat(avg.toFixed(1)),
       mBs: parseFloat((avg / 8).toFixed(2)),
       duration: parseFloat(duration.toFixed(1)),
+      totalMB: parseFloat(totalMB.toFixed(2)),
+      unit: totalMB >= 1000 ? 'GB' : 'MB',
       samples: samples,
       node: node,
       timestamp: Date.now()
@@ -161,6 +164,12 @@ export default async function(ctx) {
   // 节点显示文本：国家 · 城市（与 IPPure 原版一致）
   const n = result.node || {};
   const addrText = [n.country, n.city].filter(Boolean).join(' · ') || '未知';
+
+  // 总量与均值使用同一单位（MB / GB 自动切换）
+  const unit = result.unit || 'MB';
+  const totalMB = result.totalMB || 0;
+  const totalVal = unit === 'GB' ? (totalMB / 1000).toFixed(2) : totalMB.toFixed(1);
+  const avgVal = unit === 'GB' ? (result.mBs / 1000).toFixed(2) : result.mBs.toFixed(2);
 
   // 逐秒数据按每行 5 个排成两行
   function sampleRow(values, offset) {
@@ -322,12 +331,31 @@ export default async function(ctx) {
       {
         type: 'stack',
         direction: 'row',
+        alignItems: 'center',
         children: [
           {
             type: 'text',
-            text: `均值 ${result.mBs} MB/s`,
+            text: '总量 ',
             font: { size: 'caption2' },
             textColor: { light: '#6B6B6B', dark: '#A1A1A6' }
+          },
+          {
+            type: 'text',
+            text: `${totalVal} ${unit}`,
+            font: { size: 'caption2', weight: 'bold' },
+            textColor: color
+          },
+          {
+            type: 'text',
+            text: '  均值 ',
+            font: { size: 'caption2' },
+            textColor: { light: '#6B6B6B', dark: '#A1A1A6' }
+          },
+          {
+            type: 'text',
+            text: `${avgVal} ${unit}/s`,
+            font: { size: 'caption2', weight: 'bold' },
+            textColor: color
           },
           { type: 'spacer' },
           {
