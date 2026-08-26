@@ -23,8 +23,8 @@ function saveCookie(rawCookie) {
 
     let cookieToSave = rawCookie;
     if (hasAuth) {
-        // 提取关键认证字段
-        const fields = ["cookie2", "_tb_token_", "sgcookie", "unb", "lgc", "tracknick"];
+        // 提取关键认证字段（含 mtop 签名所需的 _m_h5_tk）
+        const fields = ["cookie2", "_tb_token_", "sgcookie", "unb", "lgc", "tracknick", "_m_h5_tk", "_m_h5_tk_enc"];
         const usefulParts = [];
         fields.forEach(field => {
             const match = rawCookie.match(new RegExp(field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "=[^;]+"));
