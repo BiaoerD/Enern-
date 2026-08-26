@@ -3,10 +3,10 @@ description: 淘宝 Cookie 获取 + 淘金币每日自动签到。启用后打�
 author: BiaoerD
 
 scriptings:
-  # 抓取 Cookie：同时匹配 H5 网关 (h5api) 与原生网关 (acs) 的 mtop 请求
+  # 抓取 Cookie：匹配 H5 网关 (/h5/) 与原生网关 (/gw/) 的 mtop 请求
   - http_request:
       name: 淘宝 Cookie
-      match: '^https?:\/\/(h5api|acs)\.m\.taobao\.com\/h5\/mtop\.'
+      match: '^https?:\/\/(h5api|acs)\.m\.taobao\.com\/(h5|gw)\/mtop\.'
       script_url: https://raw.githubusercontent.com/BiaoerD/Enern-/main/taobao_cookie.js
       timeout: 30
 
@@ -16,6 +16,16 @@ scriptings:
       cron: '0 8 * * *'
       script_url: https://raw.githubusercontent.com/BiaoerD/Enern-/main/taobao_coin.js
       timeout: 60
+
+# 屏蔽淘宝系 QUIC，迫使 App 回退到可被 MITM 解密的 HTTP/HTTPS
+rules:
+  - and:
+      match:
+        - domain_suffix:
+            match: taobao.com
+        - protocol:
+            match: quic
+      policy: REJECT
 
 mitm:
   hostnames:
