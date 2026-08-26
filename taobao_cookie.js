@@ -1,13 +1,13 @@
 /**
  * 淘宝 Cookie 获取脚本（Egern 兼容 Surge http-request）
  *
- * 触发条件：淘宝 App 内 h5api.m.taobao.com 的 mtop 请求（含淘金币页面）
- * Cookie 有变化时才保存并通知，避免频繁弹窗
- *
- * 存储 Key：TB_COOKIE
+ * 触发条件：淘宝 App 内 h5api/acs.m.taobao.com 的 mtop 请求（含淘金币页面）
+ * 1. Cookie 有变化时才保存并通知（Key：TB_COOKIE）
+ * 2. 记录淘金币相关接口名（Key：taojinbi_api_list），供签到脚本自动发现接口
  */
 
 const cookieKey = "TB_COOKIE";
+const apiListKey = "taojinbi_api_list";
 
 function getCookieFromRequest() {
     return $request.headers["Cookie"] || $request.headers["cookie"] || "";
@@ -48,7 +48,39 @@ function saveCookie(rawCookie) {
     return true;
 }
 
+// 记录淘金币相关 mtop 接口（api 名 + 版本 + data 参数）
+function recordCoinApi(url) {
+    try {
+        const apiMatch = url.match(/[?&]api=([^&]+)/);
+        if (!apiMatch) return;
+        const api = decodeURIComponent(apiMatch[1]);
+        if (!/coin|jinbi/i.test(api)) return;
+
+        const vMatch = url.match(/[?&]v=([^&]+)/);
+        const dataMatch = url.match(/[?&]data=([^&]*)/);
+        const entry = {
+            api: api,
+            v: vMatch ? decodeURIComponent(vMatch[1]) : "1.0",
+            data: dataMatch ? decodeURIComponent(dataMatch[1]) : "{}"
+        };
+
+        let list = [];
+        try { list = JSON.parse($persistentStore.read(apiListKey) || "[]"); } catch (e) {}
+
+        const idx = list.findIndex(x => x.api === api);
+        if (idx >= 0) {
+            list[idx] = entry; // 更新参数
+        } else {
+            list.push(entry);
+            if (list.length > 10) list = list.slice(-10);
+        }
+        $persistentStore.write(JSON.stringify(list), apiListKey);
+        console.log("已记录淘金币接口: " + api);
+    } catch (e) {}
+}
+
 const cookie = getCookieFromRequest();
 saveCookie(cookie);
+recordCoinApi($request.url);
 
 $done({});
