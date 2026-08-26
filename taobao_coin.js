@@ -1,16 +1,14 @@
 /**
  * 淘宝淘金币 自动签到脚本（Egern 原生版）
  *
- * 接口：mtop.taobao.jinbi.dailySign（淘金币 H5 页面每日签到）
- * 流程：首次请求 sign 为空 → 返回 TOKEN_EMPTY 并下发 _m_h5_tk →
- *       合并新令牌到 Cookie 后带签名重试
- * 依赖：淘宝 Cookie 模块抓取的 TB_COOKIE（需含 cookie2 等登录字段）
+ * 自动发现接口：从 taobao_cookie.js 记录的淘金币接口列表（taojinbi_api_list）
+ * 中逐个尝试签到接口（优先 sign/checkin/daily 命名，其次其它 coin/jinbi 接口）。
+ * 签名：sign = md5(token & t & appKey & data)，token 来自 _m_h5_tk Cookie。
  */
 
 const COOKIE_KEY = 'TB_COOKIE';
+const API_LIST_KEY = 'taojinbi_api_list';
 const APP_KEY = '12574478';
-const API_NAME = 'mtop.taobao.jinbi.dailySign';
-const API_VERSION = '1.0';
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148';
 const REFERER = 'https://market.m.taobao.com/app/tb-source-app/tz-wk/index.html';
 
@@ -122,7 +120,11 @@ function md5(str) {
 
 // ================= 工具 =================
 
-// 把 Set-Cookie 里的 _m_h5_tk / _m_h5_tk_enc 合并进 Cookie 串
+function extractToken(cookieStr) {
+  const m = cookieStr.match(/_m_h5_tk=([^_;]+)_/);
+  return m ? m[1] : '';
+}
+
 function mergeH5tk(cookieStr, setCookieHeader) {
   if (!setCookieHeader) return cookieStr;
   const jar = {};
@@ -139,11 +141,6 @@ function mergeH5tk(cookieStr, setCookieHeader) {
   return Object.keys(jar).map(k => k + '=' + jar[k]).join('; ');
 }
 
-function extractToken(cookieStr) {
-  const m = cookieStr.match(/_m_h5_tk=([^_;]+)_/);
-  return m ? m[1] : '';
-}
-
 // ================= 主逻辑 =================
 export default async function(ctx) {
   let cookie = ctx.storage.get(COOKIE_KEY) || '';
@@ -155,13 +152,12 @@ export default async function(ctx) {
   let token = extractToken(cookie);
   const messages = [];
 
-  // mtop 请求：令牌无效时自动从 Set-Cookie 刷新令牌与 Cookie 并重试
-  async function mtop(api, v, dataObj) {
-    const dataStr = JSON.stringify(dataObj || {});
+  // mtop 请求：令牌无效时自动从 Set-Cookie 刷新并重试
+  async function mtop(api, v, dataStr) {
     async function call(tk, ck) {
       const t = Date.now();
       const sign = md5(tk + '&' + t + '&' + APP_KEY + '&' + dataStr);
-      const url = `https://h5api.m.taobao.com/h5/${api}/${v}/?jsv=2.7.2&appKey=${APP_KEY}&t=${t}&sign=${sign}&api=${api}&v=${v}&type=originaljson&dataType=json`;
+      const url = `https://h5api.m.taobao.com/h5/${api}/${v}/?jsv=2.7.2&appKey=${APP_KEY}&t=${t}&sign=${sign}&api=${api}&v=${v}&type=originaljson&dataType=json&data=${encodeURIComponent(dataStr)}`;
       return ctx.http.post(url, {
         headers: {
           'Cookie': ck,
@@ -187,25 +183,54 @@ export default async function(ctx) {
     return j;
   }
 
-  function retOf(j) { return (j.ret && j.ret[0]) || '无返回'; }
+  function retOf(j) { return (j.ret && j.ret[0]) || ''; }
 
-  // 签到
-  try {
-    const j = await mtop(API_NAME, API_VERSION, {});
-    const ret = retOf(j);
-    if (ret.indexOf('SUCCESS') === 0) {
-      const data = j.data || {};
-      const r = data.result || data;
-      const coin = r.coinNum || r.coin || r.increaseAmount || '';
-      messages.push('【签到】成功' + (coin ? `，获得 ${coin} 金币` : ''));
-    } else if (/已签|已经签|重复|REPEAT/i.test(ret)) {
-      messages.push('【签到】今日已签到');
-    } else {
-      messages.push('【签到】失败: ' + ret);
-      if (j.data) messages.push('【详情】' + JSON.stringify(j.data).slice(0, 150));
+  // 读取记录的淘金币接口，按优先级排序：sign/checkin/daily 优先
+  let list = [];
+  try { list = JSON.parse(ctx.storage.get(API_LIST_KEY) || '[]'); } catch (e) {}
+  const candidates = [];
+  list.forEach(e => { if (e && /sign|checkin|daily/i.test(e.api)) candidates.push(e); });
+  list.forEach(e => { if (e && !candidates.includes(e)) candidates.push(e); });
+  // 兜底：常见接口名
+  candidates.push({ api: 'mtop.taobao.jinbi.dailySign', v: '1.0', data: '{}' });
+
+  let found = false;
+  const tried = [];
+  for (const c of candidates) {
+    tried.push(c.api);
+    try {
+      const j = await mtop(c.api, c.v || '1.0', c.data || '{}');
+      const ret = retOf(j);
+      if (/API_NOT_FOUNDED|接口不存在/i.test(ret)) {
+        await new Promise(r => setTimeout(r, 800));
+        continue; // 接口不存在，试下一个
+      }
+      // 接口存在，得到真实响应
+      if (ret.indexOf('SUCCESS') === 0) {
+        const data = j.data || {};
+        const r = data.result || data;
+        const coin = r.coinNum || r.coin || r.increaseAmount || '';
+        messages.push('【签到】成功' + (coin ? `，获得 ${coin} 金币` : '') + `（${c.api}）`);
+        found = true;
+      } else if (/已签|重复|REPEAT/i.test(ret)) {
+        messages.push('【签到】今日已签到（' + c.api + '）');
+        found = true;
+      } else {
+        messages.push('【签到】失败: ' + ret + '（' + c.api + '）');
+        if (j.data) messages.push('【详情】' + JSON.stringify(j.data).slice(0, 150));
+        found = true;
+      }
+      break;
+    } catch (e) {
+      continue;
     }
-  } catch(e) {
-    messages.push('【签到】异常: ' + (e && e.message ? e.message : e));
+  }
+
+  if (!found) {
+    messages.push('【签到】失败: 尝试的接口均不存在');
+    messages.push('已记录接口: ' + (list.map(e => e.api).join(', ') || '无，请先在H5淘金币页面操作一次'));
+  } else {
+    messages.push('已尝试: ' + tried.join(', '));
   }
 
   const ok = messages.some(m => m.includes('成功') || m.includes('已签到'));
