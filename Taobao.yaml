@@ -1,0 +1,15 @@
+name: 淘宝淘金币
+description: 淘宝 Cookie 获取。启用后打开淘宝 App 的淘金币页面即可自动抓取 Cookie（Cookie 变化时才通知）。
+author: BiaoerD
+
+scriptings:
+  # 抓取 Cookie：淘宝 App 内 h5api mtop 请求触发
+  - http_request:
+      name: 淘宝 Cookie
+      match: '^https?:\/\/h5api\.m\.taobao\.com\/h5\/mtop\.'
+      script_url: https://raw.githubusercontent.com/BiaoerD/Enern-/main/taobao_cookie.js
+      timeout: 30
+
+mitm:
+  hostnames:
+    - h5api.m.taobao.com
