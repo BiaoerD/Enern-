@@ -1,20 +1,24 @@
 /**
  * 淘宝淘金币 自动签到脚本（Egern 原生版）
  *
- * 功能：每日签到 / 领取待领金币 / 查询余额
- * 依赖：淘宝 Cookie 模块抓取的 TB_COOKIE（需包含 _m_h5_tk 字段用于签名）
+ * 接口：mtop.taobao.jinbi.dailySign（淘金币 H5 页面每日签到）
+ * 流程：首次请求 sign 为空 → 返回 TOKEN_EMPTY 并下发 _m_h5_tk →
+ *       合并新令牌到 Cookie 后带签名重试
+ * 依赖：淘宝 Cookie 模块抓取的 TB_COOKIE（需含 cookie2 等登录字段）
  */
 
 const COOKIE_KEY = 'TB_COOKIE';
 const APP_KEY = '12574478';
+const API_NAME = 'mtop.taobao.jinbi.dailySign';
+const API_VERSION = '1.0';
 const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148';
-const REFERER = 'https://pages.tmall.com/wow/a/act/dailycoin';
+const REFERER = 'https://market.m.taobao.com/app/tb-source-app/tz-wk/index.html';
 
 // ================= MD5 实现 =================
 function md5(str) {
   function rl(n, c) { return (n << c) | (n >>> (32 - c)); }
   function au(x, y) { var l = (x & 0xFFFF) + (y & 0xFFFF), m = (x >> 16) + (y >> 16) + (l >> 16); return (m << 16) | (l & 0xFFFF); }
-  function cvt(n, b) { var m = (1 << (8 * b)) - 1, x = ''; for (var i = 0; i < 4 * b; i++) { x += ((n >> (i * 8 + 4)) & 0xF).toString(16) + ((n >> (i * 8)) & 0xF).toString(16); } return x; }
+  function cvt(n, b) { var x = ''; for (var i = 0; i < 4 * b; i++) { x += ((n >> (i * 8 + 4)) & 0xF).toString(16) + ((n >> (i * 8)) & 0xF).toString(16); } return x; }
   function binl(x, len) {
     x[len >> 5] |= 0x80 << (len % 32);
     x[(((len + 64) >>> 9) << 4) + 14] = len;
@@ -116,46 +120,67 @@ function md5(str) {
   return cvt(bin[0], 4) + cvt(bin[1], 4) + cvt(bin[2], 4) + cvt(bin[3], 4);
 }
 
+// ================= 工具 =================
+
+// 把 Set-Cookie 里的 _m_h5_tk / _m_h5_tk_enc 合并进 Cookie 串
+function mergeH5tk(cookieStr, setCookieHeader) {
+  if (!setCookieHeader) return cookieStr;
+  const jar = {};
+  cookieStr.split(';').forEach(p => {
+    const i = p.indexOf('=');
+    if (i > 0) jar[p.slice(0, i).trim()] = p.slice(i + 1).trim();
+  });
+  const re = /([^=;,]+)=([^;]*)/g;
+  let m;
+  while ((m = re.exec(setCookieHeader)) !== null) {
+    const name = m[1].trim();
+    if (name === '_m_h5_tk' || name === '_m_h5_tk_enc') jar[name] = m[2].trim();
+  }
+  return Object.keys(jar).map(k => k + '=' + jar[k]).join('; ');
+}
+
+function extractToken(cookieStr) {
+  const m = cookieStr.match(/_m_h5_tk=([^_;]+)_/);
+  return m ? m[1] : '';
+}
+
 // ================= 主逻辑 =================
 export default async function(ctx) {
-  const cookie = ctx.storage.get(COOKIE_KEY) || '';
+  let cookie = ctx.storage.get(COOKIE_KEY) || '';
   if (!cookie) {
     ctx.notify({ title: '淘宝淘金币', body: '❌ Cookie 缺失，请先打开淘宝App淘金币页面获取' });
     return;
   }
 
-  // 从 Cookie 提取 mtop 签名令牌
-  const tkMatch = cookie.match(/_m_h5_tk=([^_;]+)_/);
-  let token = tkMatch ? tkMatch[1] : '';
-
+  let token = extractToken(cookie);
   const messages = [];
 
-  // mtop 请求（自动处理令牌刷新重试）
+  // mtop 请求：令牌无效时自动从 Set-Cookie 刷新令牌与 Cookie 并重试
   async function mtop(api, v, dataObj) {
     const dataStr = JSON.stringify(dataObj || {});
-    async function call(tk) {
+    async function call(tk, ck) {
       const t = Date.now();
-      const sign = tk ? md5(tk + '&' + t + '&' + APP_KEY + '&' + dataStr) : '';
-      const url = `https://h5api.m.taobao.com/h5/${api}/${v}/?jsv=2.7.2&appKey=${APP_KEY}&t=${t}&sign=${sign}&api=${api}&v=${v}&type=originaljson&dataType=json&data=${encodeURIComponent(dataStr)}`;
+      const sign = md5(tk + '&' + t + '&' + APP_KEY + '&' + dataStr);
+      const url = `https://h5api.m.taobao.com/h5/${api}/${v}/?jsv=2.7.2&appKey=${APP_KEY}&t=${t}&sign=${sign}&api=${api}&v=${v}&type=originaljson&dataType=json`;
       return ctx.http.post(url, {
         headers: {
-          'Cookie': cookie,
+          'Cookie': ck,
           'User-Agent': UA,
           'Referer': REFERER,
-          'Content-Type': 'application/x-www-form-urlencoded'
+          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
         },
         timeout: 10000
       });
     }
-    let resp = await call(token);
+    let resp = await call(token, cookie);
     let j = await resp.json();
     const ret = (j.ret && j.ret[0]) || '';
-    if (/TOKEN_EMPTY|TOKEN_EXOIRED|TOKEN_OVERDUE|ILLEGAL_ACCESS/i.test(ret)) {
+    if (/TOKEN_EMPTY|TOKEN_EXPIRED|TOKEN_OVERDUE|FAIL_SYS_TOKEN|令牌/i.test(ret)) {
       const sc = resp.headers.get('set-cookie') || '';
-      const m2 = sc.match(/_m_h5_tk=([^_;]+)_/);
-      if (m2) {
-        token = m2[1];
-        resp = await call(token);
+      cookie = mergeH5tk(cookie, sc);
+      token = extractToken(cookie);
+      if (token) {
+        resp = await call(token, cookie);
         j = await resp.json();
       }
     }
@@ -164,58 +189,29 @@ export default async function(ctx) {
 
   function retOf(j) { return (j.ret && j.ret[0]) || '无返回'; }
 
-  // 1. 签到
+  // 签到
   try {
-    const j = await mtop('mtop.taobao.coin.signedin', '1.0', {});
+    const j = await mtop(API_NAME, API_VERSION, {});
     const ret = retOf(j);
-    if (ret.indexOf('SUCCESS') === 0 && j.data) {
-      const r = j.data.result || {};
-      messages.push('【签到】' + (r.success ? `成功，获得 ${r.coinNum || ''} 金币` : (r.message || '成功')));
-    } else if (ret.includes('已签到') || ret.includes('已经')) {
+    if (ret.indexOf('SUCCESS') === 0) {
+      const data = j.data || {};
+      const r = data.result || data;
+      const coin = r.coinNum || r.coin || r.increaseAmount || '';
+      messages.push('【签到】成功' + (coin ? `，获得 ${coin} 金币` : ''));
+    } else if (/已签|已经签|重复|REPEAT/i.test(ret)) {
       messages.push('【签到】今日已签到');
     } else {
       messages.push('【签到】失败: ' + ret);
+      if (j.data) messages.push('【详情】' + JSON.stringify(j.data).slice(0, 150));
     }
   } catch(e) {
     messages.push('【签到】异常: ' + (e && e.message ? e.message : e));
   }
 
-  await new Promise(r => setTimeout(r, 2000));
-
-  // 2. 领取待领金币
-  try {
-    const j = await mtop('mtop.taobao.coin.acquire', '1.0', {});
-    const ret = retOf(j);
-    if (ret.indexOf('SUCCESS') === 0 && j.data) {
-      const r = j.data.result || {};
-      messages.push('【领金币】' + (r.success ? `领取 ${r.coinNum || 0} 金币` : (r.message || '暂无可领金币')));
-    } else {
-      messages.push('【领金币】' + ret);
-    }
-  } catch(e) {
-    messages.push('【领金币】异常: ' + (e && e.message ? e.message : e));
-  }
-
-  await new Promise(r => setTimeout(r, 1000));
-
-  // 3. 查询余额
-  try {
-    const j = await mtop('mtop.taobao.coin.home', '1.0', {});
-    const ret = retOf(j);
-    if (ret.indexOf('SUCCESS') === 0 && j.data) {
-      const r = j.data.result || {};
-      messages.push('【余额】当前金币：' + (r.coinAmount || r.totalCoin || '未知'));
-    } else {
-      messages.push('【余额】' + ret);
-    }
-  } catch(e) {
-    messages.push('【余额】异常: ' + (e && e.message ? e.message : e));
-  }
-
   const ok = messages.some(m => m.includes('成功') || m.includes('已签到'));
   ctx.notify({
     title: '淘宝淘金币',
-    subtitle: ok ? '✅ 任务完成' : '⚠️ 部分任务异常',
+    subtitle: ok ? '✅ 任务完成' : '⚠️ 签到异常',
     body: messages.join('\n')
   });
 }
