@@ -1,3 +1,8 @@
+#!name=网上国网签到
+#!desc=自动签到 + Cookie抓取，需安装MITM证书
+#!author=BiaoerD
+#!date=2026-08-27
+
 [MITM]
 hostname = csc-service.sgcc.com.cn
 
